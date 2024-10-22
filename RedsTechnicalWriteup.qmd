@@ -1,0 +1,254 @@
+---
+title: "Reds Take-Home Assessment Writeup"
+author: "Lucca Ferraz"
+format: pdf
+editor: visual
+execute:
+  cache: true
+  echo: false
+---
+
+# Predicting Pitch Mixes Faced In Major League Baseball
+
+## Importance
+
+Baseball analytics for years has focused on measuring batter performance in a vacuum, trying to estimate batter true talent through a variety of methods and metrics (WAR, BABIP, wOBA, etc.). However, in evaluating these hitters too little has been explored about the *context* in which different players bat. As we all know, not all pitches are created equal, and different hitters will face a different set of pitches over the course of the season. But can we predict these pitch "mixes"? It can be extremely useful to players and managers alike to know what a given batter can expect on a daily basis when he steps up to the plate. Hitters can spend their offseason working on their performance against certain pitches to remain one step ahead of opposing pitchers, and managers can make better lineup decisions knowing which pitches are likely to come against which batters. For this project, the goal was to predict 2024 pitch mixes seen by hitters who faced at least 1,000 pitches both from 2021-2023 and in 2024 (although no 2024 data was available to me), categorized into three pitch types: fastballs, breaking balls, and off-speed pitches.
+
+## Data
+
+For this project, I had access to pitch-by-pitch data from the 2021-2023 seasons. Each pitch was labeled with the Statcast pitch type as well as other relevant information (batter ID, pitcher ID, bat side, throw side, game info, etc.) as well as the exact characteristics of the pitch and detailed results of the play (xWOBA, BABIP, launch speed/angle, ISO, etc.)
+
+### Formatting Data
+
+In order to make predictions for 2024, I first had to transform the data provided from a pitch-by-pitch basis into a season-by-season basis. To accomplish this, I grouped the data by batter for each season, so I had statistics on each hitter for each season in the dataset. I grouped the different pitch types into the three target categories and calculated each batter's pitch mix faced in every given season. I also computed each batter's performance against each pitch type to provide context for how good different hitters were against different pitches.
+
+### Have Pitch Mixes Changed Over Time?
+
+My first question when tackling this project was how pitch mixes across the MLB as a whole vary from year-to-year. If there is high volatility across seasons, predicting a future year's pitch mix using previous years would be extremely difficult and likely inaccurate. The plot below demonstrates the distributions of the three pitch types from 2021-2023:
+
+```{r}
+#| output: false
+setwd("~/Downloads/2025 Reds Analytics Trainee Take Home")
+library(tidyverse)
+data <- read_csv("data.csv")
+sample_submission <- read_csv("sample_submission.csv")
+predictions <- read_csv("sample_predictions.csv")
+library(janitor)
+data <- clean_names(data)
+
+unique(data$pitch_type)
+unique(data$pitch_name)
+#take out unlabeled pitches
+# data |> 
+#   filter(is.na(pitch_name)) #493 out of 1286181 (~.04% of data is missing)
+
+#map each pitch type to one of: fastball, breaking ball, off speed
+data <- data |> 
+  mutate(pitch_group = case_when(
+    pitch_type %in% c("FF", "SI", "FC", "FA") ~ "Fastball",
+    pitch_type %in% c("SL", "KC", "CU", "ST", "SV", "CS", "SC") ~ "Breaking Ball",
+    pitch_type %in% c("CH", "FS", "EP", "KN", "FO") ~ "Off-Speed"
+  ))
+
+#group pitches by batter, calculate each batter's pitch distrubution and
+#how each batter performed against each pitch
+player_pitch_data <- data |> 
+  filter(!is.na(pitch_group)) |> 
+  group_by(player_name, game_year) |> 
+  summarise(
+    pitches = n(),
+    at_bats = sum(!is.na(events)),
+    fb_seen = sum(pitch_group == "Fastball"),
+    bb_seen = sum(pitch_group == "Breaking Ball"),
+    os_seen = sum(pitch_group == "Off-Speed"),
+    pitch_type_fb = fb_seen / pitches, 
+    pitch_type_bb = bb_seen / pitches,
+    pitch_type_os = os_seen / pitches,
+    strike_rate_fb = sum(type == "S" & pitch_group == "Fastball", na.rm = TRUE) / fb_seen,
+    strike_rate_bb = sum(type == "S" & pitch_group == "Breaking Ball", na.rm = TRUE) / bb_seen,
+    strike_rate_os = sum(type == "S" & pitch_group == "Off-Speed", na.rm = TRUE) / os_seen,
+    contact_rate_fb = sum(type == "X" & pitch_group == "Fastball", na.rm = TRUE) / fb_seen,
+    contact_rate_bb = sum(type == "X" & pitch_group == "Breaking Ball", na.rm = TRUE) / bb_seen,
+    contact_rate_os = sum(type == "X" & pitch_group == "Off-Speed", na.rm = TRUE) / os_seen,
+    avg_woba_fb = sum(woba_value[pitch_group == "Fastball"], na.rm = TRUE) / fb_seen,
+    avg_woba_bb = sum(woba_value[pitch_group == "Breaking Ball"], na.rm = TRUE) / bb_seen,
+    avg_woba_os = sum(woba_value[pitch_group == "Off-Speed"], na.rm = TRUE) / os_seen,
+    avg_babip_fb = sum(babip_value[pitch_group == "Fastball"], na.rm = TRUE) / fb_seen,
+    avg_babip_bb = sum(babip_value[pitch_group == "Breaking Ball"], na.rm = TRUE) / bb_seen,
+    avg_babip_os = sum(babip_value[pitch_group == "Off-Speed"], na.rm = TRUE) / os_seen,
+    weak_pct_fb = sum(launch_speed_angle == 1 & pitch_group == "Fastball", na.rm = TRUE) / fb_seen,
+    weak_pct_bb = sum(launch_speed_angle == 1 & pitch_group == "Breaking Ball", na.rm = TRUE) / bb_seen,
+    weak_pct_os = sum(launch_speed_angle == 1 & pitch_group == "Off-Speed", na.rm = TRUE) / os_seen,
+    topped_pct_fb = sum(launch_speed_angle == 2 & pitch_group == "Fastball", na.rm = TRUE) / fb_seen,
+    topped_pct_bb = sum(launch_speed_angle == 2 & pitch_group == "Breaking Ball", na.rm = TRUE) / bb_seen,
+    topped_pct_os = sum(launch_speed_angle == 2 & pitch_group == "Off-Speed", na.rm = TRUE) / os_seen,
+    under_pct_fb = sum(launch_speed_angle == 3 & pitch_group == "Fastball", na.rm = TRUE) / fb_seen,
+    under_pct_bb = sum(launch_speed_angle == 3 & pitch_group == "Breaking Ball", na.rm = TRUE) / bb_seen,
+    under_pct_os = sum(launch_speed_angle == 3 & pitch_group == "Off-Speed", na.rm = TRUE) / os_seen,
+    flare_burner_pct_fb = sum(launch_speed_angle == 4 & pitch_group == "Fastball", na.rm = TRUE) / fb_seen,
+    flare_burner_pct_bb = sum(launch_speed_angle == 4 & pitch_group == "Breaking Ball", na.rm = TRUE) / bb_seen,
+    flare_burner_pct_os = sum(launch_speed_angle == 4 & pitch_group == "Off-Speed", na.rm = TRUE) / os_seen,
+    solid_pct_fb = sum(launch_speed_angle == 5 & pitch_group == "Fastball", na.rm = TRUE) / fb_seen,
+    solid_pct_bb = sum(launch_speed_angle == 5 & pitch_group == "Breaking Ball", na.rm = TRUE) / bb_seen,
+    solid_pct_os = sum(launch_speed_angle == 5 & pitch_group == "Off-Speed", na.rm = TRUE) / os_seen,
+    barrel_pct_fb = sum(launch_speed_angle == 6 & pitch_group == "Fastball", na.rm = TRUE) / fb_seen,
+    barrel_pct_bb = sum(launch_speed_angle == 6 & pitch_group == "Breaking Ball", na.rm = TRUE) / bb_seen,
+    barrel_pct_os = sum(launch_speed_angle == 5 & pitch_group == "Off-Speed", na.rm = TRUE) / os_seen
+  ) |> 
+  ungroup()
+```
+
+```{r}
+#plot pitch type distribution over time
+#will training on one year and applying on another cause problems or are distrubitions consistent?
+player_pitch_data |> 
+  pivot_longer(cols = c(pitch_type_fb, pitch_type_bb, pitch_type_os), 
+               names_to = "pitch_type", 
+               values_to = "proportion") |> 
+  select(game_year, proportion, pitch_type) |> 
+  ggplot(aes(x = game_year, y = proportion, fill = pitch_type, group = pitch_type)) +
+  geom_col(position = "fill") +
+  labs(title = "Pitch Type Distribution Over Time",
+       x = "Year",
+       y = "Proportion of Pitches",
+       fill = "Pitch Type") +
+  ggthemes::theme_clean() +
+  scale_fill_discrete(labels = c("Breaking Balls", "Fastballs", "Off-Speed Pitches"))
+```
+As we can see above, the distribution of pitches across the MLB is relatively consistent from year-to-year, with fastballs always in the majority and off-speed pitches being utilized the least. The assumption of consitency across seasons is important for the modeling process later.
+
+## Training the Models
+Since I had access to three season's worth of data, I decided to train the models using the 2021 pitch data to predict 2022 pitch mixes. Once I trained these models, I then applied them on the out-of-sample 2022 pitch data and evaluated their performance in predicting 2023 pitch mixes. I chose to create three model and compare their performance in order to choose the one that fits the data best. My first and baseline "model" was simply applying the previous year's pitch mix for each batter, e.g. predicting Player X to have the exact same pitch mix in 2022 as he did in 2021, and so on. Another model I tried and evaluated was a multinomial regression, since I needed three separate percentages to all add to 1. My final model was an XGBoost model, trained separately for each pitch type (fastball, breaking ball, off-speed) and then adjusted so the percentages all added to 1 (and no batter was projected to have over 100% pitches thrown to them). The multinomial and XGBoost models were trained using a combination of the previous year's pitch mix as well as the batter's performance against each type of pitch (strike rate, contact rate, average xWOBA, average BABIP, launch speed/angle zone).
+
+## Model Results
+Below is a table displaying the performance of the three models:
+
+```{r}
+#| output: false
+#filter data based on year
+data_2021 <- player_pitch_data |> filter(game_year == 2021)
+data_2022 <- player_pitch_data |> filter(game_year == 2022)
+data_2023 <- player_pitch_data |> filter(game_year == 2023)
+
+#train model: use 2021 data to predict 2022 pitch distributions
+train <- data_2021 |> 
+  inner_join(data_2022 |> select(player_name, response_fb = pitch_type_fb, 
+                                 response_bb = pitch_type_bb,
+                                 response_os = pitch_type_os)) |> 
+  filter(os_seen > 0)
+
+#test model on out-of-sample data: apply model 2022 data to predict 2023 pitch distributions
+test <- data_2022 |> 
+  inner_join(data_2023 |> select(player_name, response_fb = pitch_type_fb, 
+                                 response_bb = pitch_type_bb,
+                                 response_os = pitch_type_os)) |> 
+  filter(os_seen > 0)
+
+#baseline train RMSE: what does the accuracy look like just taking 2021 distributions to predict 2022?
+baseline_train_rmse <- train |> 
+  summarise(
+  sqrt(mean(
+    (response_fb - pitch_type_fb)^2 + (response_bb - pitch_type_bb)^2 +
+      (response_os - pitch_type_os)^2
+    ))) |> as.numeric() # 0.0659 train rmse using 2021 to predict 2022 without any modeling
+
+#baseline test RMSE: what does the accuracy look like just taking 2022 distributions to predict 2023?
+baseline_test_rmse <- test |> 
+  summarise(
+    sqrt(mean(
+      (response_fb - pitch_type_fb)^2 + (response_bb - pitch_type_bb)^2 +
+        (response_os - pitch_type_os)^2
+    ))) |> as.numeric() # 0.0585 test rmse using 2022 to predict 2023 without any modeling
+
+#build multinomial regression model
+library(nnet)
+multinom_model <- multinom(cbind(response_fb, response_bb, response_os) ~ ., 
+                  data = train |> select(-player_name, -game_year, -fb_seen, -bb_seen, -os_seen),
+                  maxit = 300)
+# summary(model)
+predicted_probs_train_multinom <- predict(multinom_model, type = "probs")
+# logLik(model)
+train_rmse_multinom <- sqrt(mean(
+  (train$response_fb - predicted_probs_train_multinom[, 1])^2 +
+    (train$response_bb - predicted_probs_train_multinom[, 2])^2 +
+    (train$response_os - predicted_probs_train_multinom[, 3])^2))
+train_rmse_multinom # 0.0477 train rmse using multinomial regression
+
+predicted_probs_test_multinom <- predict(multinom_model, type = "probs", newdata = test)
+test_rmse_multinom <- sqrt(mean(
+  (test$response_fb - predicted_probs_test_multinom[, 1])^2 +
+    (test$response_bb - predicted_probs_test_multinom[, 2])^2 +
+    (test$response_os - predicted_probs_test_multinom[, 3])^2))
+test_rmse_multinom # 0.0645 test rmse using multinomial regression
+
+#build XGBoost model
+library(xgboost)
+x_train <- train |> 
+  select(pitches, at_bats, pitch_type_fb:barrel_pct_os) |> 
+  as.matrix()
+x_test <- test |> 
+  select(pitches, at_bats, pitch_type_fb:barrel_pct_os) |> 
+  as.matrix()
+train_response_fb <- train$response_fb
+train_response_bb <- train$response_bb
+train_response_os <- train$response_os
+
+xgb_params <- list(
+  objective = "reg:squarederror",  # regression task
+  eval_metric = "rmse",            # error metric
+  max_depth = 6,
+  eta = 0.1,
+  nthread = 4
+)
+
+#fit separate xgboost models for each pitch type
+xg_fb <- xgboost(data = x_train, label = train_response_fb, params = xgb_params,
+                 nrounds = 100, verbose = 0)
+xg_bb <- xgboost(data = x_train, label = train_response_bb, params = xgb_params,
+                 nrounds = 100, verbose = 0)
+xg_os <- xgboost(data = x_train, label = train_response_os, params = xgb_params,
+                 nrounds = 100, verbose = 0)
+
+#adjust predictions so that the predicted percentages for each pitch type sum to 1
+train_fb_xg <- predict(xg_fb, x_train)
+train_bb_xg <- predict(xg_bb, x_train)
+train_os_xg <- predict(xg_os, x_train)
+xg_train_total <- train_fb_xg + train_bb_xg + train_os_xg
+train_fb_normal <- train_fb_xg / xg_train_total
+train_bb_normal <- train_bb_xg / xg_train_total
+train_os_normal <- train_os_xg / xg_train_total
+train_rmse_xgb <- sqrt(mean(
+  (train$response_fb - train_fb_normal)^2 +
+    (train$response_bb - train_bb_normal)^2 +
+    (train$response_os - train_os_normal)^2))
+train_rmse_xgb # 0.0012 train rmse using XGBoost
+
+#adjust predictions so that the predicted percentages for each pitch type sum to 1
+pred_fb_xg <- predict(xg_fb, x_test)
+pred_bb_xg <- predict(xg_bb, x_test)
+pred_os_xg <- predict(xg_os, x_test)
+xg_pred_total <- pred_fb_xg + pred_bb_xg + pred_os_xg
+pred_fb_normalized <- pred_fb_xg / xg_pred_total
+pred_bb_normalized <- pred_bb_xg / xg_pred_total
+pred_os_normalized <- pred_os_xg / xg_pred_total
+test_rmse_xgb <- sqrt(mean(
+  (test$response_fb - pred_fb_normalized)^2 +
+    (test$response_bb - pred_bb_normalized)^2 +
+    (test$response_os - pred_os_normalized)^2))
+test_rmse_xgb # 0.0580 test rmse using XGBoost
+```
+
+```{r}
+data.frame(baseline_train_rmse, baseline_test_rmse, train_rmse_multinom, 
+           test_rmse_multinom, train_rmse_xgb, test_rmse_xgb) |> 
+  pivot_longer(cols = everything(), 
+               names_to = c(".value", "model"), 
+               names_pattern = "(train|test)_(.*)") |> 
+  mutate(model = c("Baseline", "Multinomial", "XGBoost")) |> 
+  rename(train_rmse = train, test_rmse = test) |> 
+  knitr::kable()
+```
+We can see that the XGBoost model had the best performance (lowest RMSE) on both the training and test data. As such, I chose this model to use for my final predictions.
+
+## Limitations
+Although not a huge problem here given the 1,000 pitch threshold for the data provided, one potential hurdle in this process is a lack of data. For example, 4 players in the 2024 predictions dataset did not have any pitch data for the 2023 season. For these players, I estimated their pitch mix for 2024 using their 2022 numbers. A huge limitation on this work is the fact that teams get new data throughout the season. If a batter performed poorly against a certain pitch type in 2022, teams might try to throw him more of that pitch in 2023. However, if one month into the 2023 season that same batter is dominating his previous Achilles Heel pitch, opposing pitchers are going to adjust and throw that pitch to him less. As such, this model should be adjusted adn re-calculated semi-frequently to capture recent trends as the season goes on. A portion of the batter pitch mix faced could be due to game situational factors as well, which was not captured by my model. The reason for this is predicting situational factors for individual players in a new season(2024) would be too difficult and noisy with the data provided. Ultimately, the predictions attached provide a best estimate, but there is always room for error and they should be treated as estimates, not objective truths.

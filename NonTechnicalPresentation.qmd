@@ -1,0 +1,152 @@
+---
+title: "Reds Take Home Assessment Coaching Presentation"
+subtitle: "Applications of Pitch Mix Predictions Model"
+author: "Lucca Ferraz"
+format: 
+  revealjs: 
+    theme: edtheme2.scss
+    slide-number: true
+    transition: slide
+    embed-resources: true
+editor: visual
+execute:
+  echo: false
+  warning: false
+  message: false
+  cache: true
+---
+
+```{r}
+library(tidyverse)
+library(gt)
+library(gtExtras)
+setwd("~/Downloads/2025 Reds Analytics Trainee Take Home")
+prediction_players <- read_csv("predictions.csv")
+stats <- read_csv("all_years_stats.csv")
+library(baseballr)
+reds_roster <- mlb_rosters(team_id = 113, season = 2024, roster_type = "fullRoster")
+reds_stats <- stats |> 
+  semi_join(reds_roster |> select(person_id), by = join_by(batter_id == person_id)) |> filter(game_year == 2023)
+```
+
+# Importance
+
+- Knowing next season's expected pitch mixes allows hitters to better prepare over the offseason
+    - A hitter coming off a strong season will be scouted more heavily by opposing teams
+    - Opposing pitchers will be smarter and throw pitches designed to catch him off-guard
+    - By knowing these pitches ahead of time, he can work on what he is more likely to see
+    
+# The Model (Brief Rundown)
+- Uses prior season data to predict pitch mixes faced by a given batter the next year
+    - Incorporates both pitch mix faced and performance against different pitch types
+    - Accurate within ~6% in total on average (within ~2% on average for each pitch type)
+- Model built and tested on the 2021-2023 seasons
+
+# The App
+- User selects any player with at least 1000 pitches faced and the season to project their pitch mix for (2022-2024 available)
+- App outputs: pitch mix and stats for the previous season, projected pitch mix for the upcoming season
+- [Link to app](https://xhbhit-lucca0ferraz.shinyapps.io/pitch_mix_predictor/)
+
+# Example: Will Benson
+```{r}
+prev_year_stats_table <- function(player, year){
+  player_name <- sub("(.*),\\s*(.*)", "\\2 \\1", player)
+  player_stats <- stats |> filter(player_name == player & game_year == as.numeric(year)-1) |> 
+    select(batter_id, at_bats, strikeouts, home_runs, walks, wOBA, BABIP, ISO)
+  if (nrow(player_stats) == 0) {
+    return()
+  }
+  id <- player_stats |> pull(batter_id)
+  player_stats |> 
+    select(-batter_id) |> 
+    pivot_longer(cols = c("at_bats", "strikeouts", "home_runs", "walks", "wOBA",
+                          "BABIP", "ISO"), names_to = "Stat", values_to = "Value") |> 
+    gt() |> 
+    gt_theme_538() |> 
+    fmt_number(rows = 1:4, decimals = 0) |> 
+    fmt_number(rows = 5:7, decimals = 3) |> 
+    tab_header(title = paste(player_name, "Stats in", as.numeric(year)-1)) |> 
+    data_color(columns = "Value", rows = 3, palette = "RdYlGn", domain = c(0, 62)) |> 
+    data_color(columns = "Value", rows = 4, palette = "RdYlGn", domain = c(0, 129)) |> 
+    data_color(columns = "Value", rows = 5, palette = "RdYlGn", domain = c(0, 0.4586411)) |> 
+    data_color(columns = "Value", rows = 6, palette = "RdYlGn", domain = c(0, 0.3179572)) |> 
+    data_color(columns = "Value", rows = 7, palette = "RdYlGn", domain = c(0, 0.3161004))
+}
+prev_year_stats_table("Benson, Will", 2024)
+```
+
+# Example: Will Benson
+```{r}
+prev_year_mix_plot <- function(player, year){
+  player_name <- sub("(.*),\\s*(.*)", "\\2 \\1", player)
+  mix <- stats |> 
+    filter(player_name == player & game_year == as.numeric(year)-1) |> 
+    select(Fastballs = pitch_type_fb, `Breaking Balls` = pitch_type_bb, 
+           `Off-Speed Pitches` = pitch_type_os) |> 
+    pivot_longer(cols = c("Fastballs", "Breaking Balls", "Off-Speed Pitches"), 
+                 names_to = "Pitch Type", values_to = "percentage")
+  if (nrow(mix) == 0) {
+    return(ggplot() + ggtitle("No data available for this player/year"))
+  }
+  mix |> 
+    ggplot(aes(`Pitch Type`, percentage, fill = `Pitch Type`)) +
+    geom_col() +
+    ggthemes::theme_clean() +
+    labs(title = paste(player_name, "Pitch Mix in", as.numeric(year)-1)) +
+    geom_label(aes(label = paste(round(percentage, 2)*100, "%")), fill = "white")
+}
+prev_year_mix_plot("Benson, Will", 2024)
+```
+
+# Example: Will Benson
+```{r}
+projected_mix_plot <- function(player, year){
+  player_name <- sub("(.*),\\s*(.*)", "\\2 \\1", player)
+  mix <- stats |> 
+    filter(player_name == player & game_year == as.numeric(year)-1) |> 
+    select(Fastballs = predicted_fb, `Breaking Balls` = predicted_bb, 
+           `Off-Speed Pitches` = predicted_os) |> 
+    pivot_longer(cols = c("Fastballs", "Breaking Balls", "Off-Speed Pitches"), 
+                 names_to = "Pitch Type", values_to = "percentage")
+  if (nrow(mix) == 0) {
+    return(ggplot() + ggtitle("No data available for this player/year"))
+  }
+  mix |> 
+    ggplot(aes(`Pitch Type`, percentage, fill = `Pitch Type`)) +
+    geom_col() +
+    ggthemes::theme_clean() +
+    labs(title = paste(player_name, "Projected Pitch Mix in", year)) +
+    geom_label(aes(label = paste(round(percentage, 2)*100, "%")), fill = "white")
+}
+projected_mix_plot("Benson, Will", 2024)
+```
+
+# Example: Will Benson
+- Had an inconsistent season in 2023, sent down to the minors after his first 8 games but returned in May with a vengeance
+- Since Benson's overall season performance was not dramatically spectacular or terrible against any particular pitch type, the model projects he will face a very similar pitch mix in 2024
+
+# Example: Spencer Steer
+```{r}
+prev_year_stats_table("Steer, Spencer", 2024)
+```
+
+# Example: Spencer Steer
+```{r}
+prev_year_mix_plot("Steer, Spencer", 2024)
+```
+
+# Example: Spencer Steer
+```{r}
+projected_mix_plot("Steer, Spencer", 2024)
+```
+
+# Example: Spencer Steer
+- Had a very successful season in 2023, one of the Reds bright young talents
+- Performed very well against fastballs, not as well against breaking balls
+- Model projects that Steer will see more breaking balls at the expense of fastballs
+    - Important insight for Steer to prepare to see more breaking balls
+
+# Conclusion
+- Model provides good baseline estimate for pitch mix
+    - Not perfect, outside factors could affect pitches seen (changing teams, spot in batting order, etc.)
+- Can use app on historical data to test validity
